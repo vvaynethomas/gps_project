@@ -1,5 +1,7 @@
 import datetime
 import pickle
+import random
+
 import matplotlib.pyplot as plt
 import matplotlib
 import pandas as pd
@@ -20,6 +22,7 @@ from sklearn.svm import OneClassSVM
 
 
 # to be replaced by lookups with Nominatim
+
 
 def load_location(place='Shanghai, China', pickle_graph=True, pickle_file=None):
     if pickle_file:
@@ -46,6 +49,8 @@ def load_location(place='Shanghai, China', pickle_graph=True, pickle_file=None):
         pickle.dump(G, open(pickle_path, 'wb'))
     return full_data, G
 
+
+full_data, G = load_location(pickle_graph=False)
 
 def calculate_great_circle_distance(start_latitude, start_longitude, end_latitude, end_longitude):
     pickup = [start_latitude, start_longitude]
@@ -74,7 +79,11 @@ def calculate_bearing(start_latitude, start_longitude, end_latitude, end_longitu
     return bearing
 
 
-def extract_user(trip_df, user_id):
+def extract_user(data, user_id):
+    if isinstance(data, pd.DataFrame):
+        trip_df = data
+    elif isinstance(data, Community):
+        trip_df = data.get_trips_df()
     filtered_df = trip_df[trip_df.uid == user_id]
     # print(f'adding {len(filtered_df.index)} trips for user {user_id}')
     new_user = User(id=user_id)
@@ -83,15 +92,19 @@ def extract_user(trip_df, user_id):
     return new_user
 
 
-def extract_users(dataframe):
-    users = []
-    uids = dataframe.uid.unique()
-    for i, uid in enumerate(uids):
-        new_user = extract_user(dataframe, uid)
-        users.append(new_user)
-        print(f'added user #{i}; id {uid}')
-    print(f'extracted {len(users)} users')
-    return users
+def extract_users(data):
+    if isinstance(data, Community):
+        return data.users
+    elif isinstance(data, pd.DataFrame):
+        users = []
+        if 'uid' in data.columns:
+            uids = data.uid.unique()
+            for i, uid in enumerate(uids):
+                new_user = extract_user(data, uid)
+                users.append(new_user)
+                print(f'added user #{i}; id {uid}')
+            print(f'extracted {len(users)} users')
+        return users
 
 
 def extract_trips(dataframe):
@@ -99,14 +112,70 @@ def extract_trips(dataframe):
     return trips
 
 
+def generate_visit(user, out_type='outlier'):
+    visits_df = pd.DataFrame([visit.as_row() for visit in user.visits])
+    new_timestamp = None
+    while not new_timestamp or new_timestamp in visits_df.timestamp:
+        new_timestamp = random.randint(visits_df.timestamp.min(), visits_df.timestamp.max())
+    if out_type == 'inlier':
+        temp_visit = visits_df.sample()
+        new_lat = temp_visit.latitude.values
+        new_lng = temp_visit.longitude.values
+        label = 1
+    else:
+        lat_min = visits_df.latitude.min()
+        lat_max = visits_df.latitude.max()
+        lng_min = visits_df.longitude.min()
+        lng_max = visits_df.longitude.max()
+        new_lat = random.choice([random.uniform(lat_max, 90), random.uniform(-90, lat_min)])
+        new_lng = random.choice([random.uniform(lng_max, 180), random.uniform(-180, lng_min)])
+        label = 0
+    new_visit = Visit(uid=user.uid, timestamp=new_timestamp, latitude=new_lat, longitude=new_lng, label=label)
+    return new_visit
+
+
+def generate_trip(user=None, out_type='outlier', data=None):
+    global full_data
+    new_trip = None
+    if not isinstance(user, User):
+        if isinstance(user, int):
+            if data:
+                user = extract_user(data=data, user_id=user)
+            else:
+                global full_data
+                user = extract_user(data=full_data, user_id=user)
+        else:
+            if isinstance(data, pd.DataFrame):
+                uid = random.choice(data.uid.unique())
+                user = extract_user(data=data, user_id=uid)
+            elif isinstance(data, Community):
+                user = random.choice(data.users)
+            else:
+                uid = random.choice(full_data.uid.unique())
+                user = extract_user(data=full_data, user_id=uid)
+    visit1 = generate_visit(user, out_type=out_type)
+    visit2 = generate_visit(user, out_type=out_type)
+    if out_type == 'inlier':
+        visit2.timestamp = visit1.timestamp + int(np.mean([trip.duration for trip in user.trips]))
+        new_trip = Trip(full=[visit1, visit2])
+    else:
+        if visit1.timestamp < visit2.timestamp:
+            new_trip = Trip(full=[visit1, visit2])
+        elif visit2.timestamp < visit1.timestamp:
+            new_trip = Trip(full=[visit2, visit1])
+    new_trip.label = np.min([visit.label for visit in new_trip.visits])
+    return new_trip
+
+
 class Visit(object):
-    def __init__(self, uid=None, timestamp=None, latitude=None, longitude=None, nn_id=None):
+    def __init__(self, uid=None, timestamp=None, latitude=None, longitude=None, nn_id=None, label=1):
         self.uid = uid
         self.timestamp = timestamp
         self.latitude = latitude
         self.longitude = longitude
         self.location = (latitude, longitude)
-        # self.nn_id = nn_id
+        self.nn_id = nn_id
+        self.label = label
         # global G
         # if not nn_id or nn_id == np.nan:
         #     # place = lookup_city(self.latitude,self.longitude)
@@ -139,11 +208,14 @@ class Visit(object):
             , 'timestamp': self.timestamp
             , 'longitude': self.longitude
             , 'latitude': self.latitude
+            , 'nearest_node': self.nn_id
+            , 'label': self.label
         }
 
 
 class Trip(object):
-    def __init__(self, full=None, uid=0, start_time=None, end_time=None, start_loc=None, end_loc=None, trip_id=0):
+    def __init__(self, full=None, uid=0, start_time=None, end_time=None, start_loc=None, end_loc=None, trip_id=0,
+                 label=1):
         self.visits = []
         if full is not None:
             if isinstance(full, list):
@@ -175,6 +247,7 @@ class Trip(object):
                     self.start_lng = v1.longitude
                     self.end_lat = v2.latitude
                     self.end_lng = v2.longitude
+                    self.label = np.min([v1.label, v2.label])
 
             elif isinstance(full, pd.Series):
                 # print('extracting trip from series')
@@ -198,11 +271,11 @@ class Trip(object):
             else:
                 self.uid = np.nan
             if start_time:
-                self.start_time = start_time
+                self.start_time = int(start_time)
             else:
                 self.start_time = np.nan
             if end_time:
-                self.end_time = end_time
+                self.end_time = int(end_time)
             else:
                 self.end_time = np.nan
             if start_loc:
@@ -217,11 +290,11 @@ class Trip(object):
                 self.end_lng = end_loc[1]
             else:
                 self.end_loc, self.end_lat, self.end_lng = np.nan, np.nan, np.nan
-        if (isinstance(self.start_time, int) and isinstance(self.end_time, int)):
-            self.duration = self.end_time - self.start_time
-        else:
-            self.duration = np.nan
-        self.tid = trip_id
+        # if (isinstance(self.start_time, int) and isinstance(self.end_time, int)):
+        self.duration = self.end_time - self.start_time
+        # else:
+        #     self.duration = np.nan
+        self.label=label
         self.bearing = calculate_bearing(self.start_lat, self.start_lng, self.end_lat, self.end_lng)
         self.mh_dist = calculate_manhattan_distance(self.start_lat, self.start_lng, self.end_lat, self.end_lng)
         self.gc_dist = calculate_great_circle_distance(self.start_lat, self.start_lng, self.end_lat, self.end_lng)
@@ -239,17 +312,17 @@ class Trip(object):
     def as_row(self):
         return {
             'uid': self.uid
-            , 'start_time_in_seconds': self.start_time
-            , 'end_time_in_seconds': self.end_time
+            , 'start_time_in_seconds': int(self.start_time)
+            , 'end_time_in_seconds': int(self.end_time)
             , 'start_longitude': self.start_lng
             , 'start_latitude': self.start_lat
             , 'end_longitude': self.end_lng
             , 'end_latitude': self.end_lat
-            , 'duration_in_seconds': self.duration
+            , 'duration_in_seconds': int(self.duration)
             , 'bearing': self.bearing
             , 'manhattan_distance': self.mh_dist
             , 'great_circle_distance': self.gc_dist
-            , 'tid': self.tid
+            , 'label': int(self.label)
         }
 
 
@@ -273,6 +346,7 @@ class Community(object):  # to hold multiple users' trips and visits
         self.uids = list(set([user.uid for user in self.users]))
         self.trips = [trip for trips in [user.trips for user in self.users] for trip in trips]
         self.visits = [visit for visits in [trip.visits for trip in self.trips] for visit in visits]
+        self.anom_id = []
 
     def get_trips_df(self):
         return pd.concat([user.get_trips_df() for user in self.users])
@@ -292,6 +366,39 @@ class Community(object):  # to hold multiple users' trips and visits
             user = [user for user in self.users if user.uid == user_id][0]
             new_visit = Visit(uid=user_id, timestamp=timestamp, latitude=latitude, longitude=longitude)
             user.add_visit(new_visit)
+
+    def generate_data(self, object='visit', out_type='outlier', add=True, n=1):
+        results = []
+        for i in range(n):
+            user = random.choice(self.users)
+            if object == 'visit':
+                new_visit = generate_visit(user, out_type)
+                if add:
+                    user.add_visit(visit=new_visit)
+                    self.visits.append(new_visit)
+                if n == 1:
+                    return new_visit
+                else:
+                    results.append(new_visit)
+            elif object == 'trip':
+                new_trip = generate_trip(user, out_type)
+                if add:
+                    user.add_trips(new_trip)
+                    self.trips.append(new_trip)
+                    self.visits = self.visits + new_trip.visits
+                if n == 1:
+                    return new_trip
+                else:
+                    results.append(new_trip)
+        return results
+
+            # elif object == 'user':
+            #     new_id = max([user.uid for user in self.users]) + 1
+            #     new_user = User(new_id)
+            #     if out_type=='inlier':
+            #         other_trips = [len(user.trips) for user in self.users]
+            #         num_trips = random.randint(min(other_trips),max(other_trips))
+            #         for i in range(num_trips):
 
     def transform_time(self, X=None, data_type='trips', inplace=False):
         if data_type == 'trips':
@@ -372,9 +479,9 @@ class User(object):
             if isinstance(trips_to_add[0], Trip):
                 # print('trips in list of Trip objects')
                 for trip in trips_to_add:
-                    prev_tids = [t.tid for t in self.trips]
-                    if trip.tid in prev_tids:
-                        trip.tid = int(max(prev_tids) + 1)
+                    # prev_tids = [t.tid for t in self.trips]
+                    # if trip.tid in prev_tids:
+                    #     trip.tid = int(max(prev_tids) + 1)
                     trip.uid = self.uid
                     self.trips.append(trip)
                     for visit in trip.visits:
@@ -384,16 +491,16 @@ class User(object):
             else:
                 # print('trip as list of attributes')
                 trip = Trip(full=trips_to_add)
-                if trip.tid in [t.tid for t in self.trips]:
-                    trip.tid = int(max([t.tid for t in self.trips]) + 1)
+                # if trip.tid in [t.tid for t in self.trips]:
+                #     trip.tid = int(max([t.tid for t in self.trips]) + 1)
                 self.trips.append(trip)
                 for visit in trip.visits:
                     self.visits.append(visit)
         elif isinstance(trips_to_add, Trip):
             # print('single Trip object passed')
-            prev_tids = [t.tid for t in self.trips]
-            if trips_to_add.tid in prev_tids:
-                trips_to_add.tid = int(max(prev_tids) + 1)
+            # prev_tids = [t.tid for t in self.trips]
+            # if trips_to_add.tid in prev_tids:
+            #     trips_to_add.tid = int(max(prev_tids) + 1)
             trips_to_add.uid = self.uid
             self.trips.append(trips_to_add)
             for visit in trips_to_add.visits:
@@ -421,8 +528,8 @@ class User(object):
                     new_visit = Visit(self.uid, latitude=location[0], longitude=location[1], timestamp=timestamp)
             elif latitude and longitude:
                 new_visit = Visit(self.uid, timestamp=timestamp, latitude=latitude, longitude=longitude)
-        prev_vids = [visit.vid for visit in self.visits]
-        new_visit.vid = max(prev_vids) + 1
+        # prev_vids = [visit.vid for visit in self.visits]
+        # new_visit.vid = max(prev_vids) + 1
         self.visits.append(new_visit)
 
     def add_connections(self, member):
@@ -444,8 +551,9 @@ class User(object):
                                     , "timestamp": [visit.timestamp for visit in self.visits]
                                     , 'latitude': [visit.latitude for visit in self.visits]
                                     , 'longitude': [visit.longitude for visit in self.visits]
-                                    , "nearest_node": [visit.get_nearest_node(graph=G) for visit in self.visits]})
-        # visit_df['uid'] = self.uid
+                                    , "nearest_node": [visit.get_nearest_node(graph=G) for visit in self.visits]
+                                    , "label": [visit.label for visit in self.visits]
+                                 })
         visit_df['vid'] = visit_df.sort_values(by=['uid', 'timestamp']).groupby('uid', sort=False).cumcount() + 1
         return visit_df
 
@@ -489,12 +597,12 @@ class gps_anomaly_detector(object):
             self.visit_data = None
         if not self.train:
             if self.kind == 'trip' and isinstance(self.trip_data, pd.DataFrame):
-                self.train = self.trip_data
+                self.train = self.trip_data.drop(['label'],axis=1)
             elif self.kind == 'visit' and isinstance(self.visit_data, pd.DataFrame):
-                self.train = self.visit_data
+                self.train = self.visit_data.drop(['label'],axis=1)
             elif self.kind == 'all' and isinstance(self.visit_data, pd.DataFrame) and isinstance(self.trip_data,
                                                                                                  pd.DataFrame):
-                self.train = [self.trip_data, self.visit_data]
+                self.train = [self.trip_data.drop(['label'],axis=1), self.visit_data.drop(['label'],axis=1)]
             else:
                 self.train = None
 
@@ -585,14 +693,14 @@ class gps_anomaly_detector(object):
                 else:
                     self.model = ec_model
             if model_type.lower() in ['ensemble', 'bgm', 'bayesiangaussian']:
-                bgm_model = BayesianGaussianMixture(n_components=len(self.train.uid.unique()))
+                bgm_model = BayesianGaussianMixture(n_components=2, max_iter=300, reg_covar=1e-1)
                 bgm_model.fit(train[i])
                 if model_type == 'ensemble':
                     models[f'bayesian_gaussian{i}'] = bgm_model
                 else:
                     self.model = bgm_model
             if model_type.lower() in ['ensemble', 'ocs', 'oneclasssvm']:
-                ocs_model = OneClassSVM(nu=0.25, gamma=0.35)
+                ocs_model = OneClassSVM(kernel='rbf', gamma=0.001, nu=0.03)
                 ocs_model.fit(train[i])
                 if model_type == 'ensemble':
                     models[f'one_class_svm{i}'] = ocs_model
@@ -602,8 +710,24 @@ class gps_anomaly_detector(object):
                 self.model = models
 
     def predict(self, X=None, kind='visit'):
-        if not X:
-            X = self.train
+        if not isinstance(X,pd.DataFrame):
+            if isinstance(self.train, list):
+                if kind == 'visit':
+                    X = self.train[1]
+                elif kind == 'trip':
+                    X = self.train[0]
+                else:
+                    X = self.train
+            elif isinstance(self.train, pd.DataFrame):
+                X = self.train
+            else:
+                if kind == 'visit':
+                    X = self.visit_data
+                elif kind == 'trip':
+                    X = self.trip_data
+                else:
+                    X = [self.trip_data, self.visit_data]
+
         if self.type == 'ensemble':
             model_preds = {}
             for name, model in self.model.items():
@@ -619,49 +743,70 @@ class gps_anomaly_detector(object):
             # results_df['mode'] = pred_df.apply(lambda x: x.mode())
             return results_df
 
-        elif len(self.model) == 1:
+        else:
             return self.model.predict(X)
 
+# def main():
 
-def main():
-    global G, full_data
-    full_data, G = load_location(pickle_graph=False) 
-    glob_comm = Community(users=extract_users(full_data))
-    # G, nodes, edges = pickle.load(open('shanghai_graph.p', 'rb'))
-    # print('extracting users')
-    # all_users = extract_users(full_data)
-    # test_uid = 146
-    # test_user = extract_user(full_data, test_uid)
-    # print(test_user.trips)
-    # print(test_user.visits)
-    # filtered_df = full_data[full_data.uid == test_uid]
-    # trips = extract_trips(filtered_df)
-    # print(type(trips[0]))
-    # test_user.add_trips(trips)
-    # print(len(test_user.trips))
-    # test_user.add_connections(member=[180, 211, 196])
-    # print(test_user.uid)
-    # print(test_user.connections)
-    # print(f'extracted {len(all_users)} from data')
-    # full_community = pickle.load(open("global_community.p", "rb"))
-    # all_trips = Community(users=all_users).trips_df
-    # test_comm = test_user.to_community()
-    # all_trips = test_comm.get_trips_df()
-    # print(all_trips.head())
-    # all_trips = full_community.trips_df
-    # print(len(glob_comm.visits))
-    # all_visits = test_user.get_visits_df()
-    # print(all_visits.head())
-    # print(all_visits.info())
-    # print(all_trips.sample(n=10, random_state=3))
-    # print(all_visits.sample(n=10, random_state=3))
+# glob_comm = Community(users=extract_users(full_data))
+# G, nodes, edges = pickle.load(open('shanghai_graph.p', 'rb'))
+# print('extracting users')
+# all_users = extract_users(full_data)
+test_uid = 146
+test_user = extract_user(full_data, test_uid)
+# print(test_user.trips)
+# print(test_user.visits)
+# filtered_df = full_data[full_data.uid == test_uid]
+# trips = extract_trips(filtered_df)
+# print(type(trips[0]))
+# test_user.add_trips(trips)
+# print(len(test_user.trips))
+# test_user.add_connections(member=[180, 211, 196])
+# print(test_user.uid)
+# print(test_user.connections)
+# print(f'extracted {len(all_users)} from data')
+# full_community = pickle.load(open("global_community.p", "rb"))
+# all_trips = Community(users=all_users).trips_df
+test_comm = test_user.to_community()
+# all_trips = test_comm.get_trips_df()
+# print(all_trips.head())
+# all_trips = full_community.trips_df
+# print(len(glob_comm.visits))
+# all_visits = test_user.get_visits_df()
+# print(all_visits.head())
+# print(all_visits.info())
+# print(all_trips.sample(n=10, random_state=3))
+# print(all_visits.sample(n=10, random_state=3))
+# ad = pickle.load(open("full_comm_ad.p", 'rb'))
 
-    ad = gps_anomaly_detector(glob_comm, kind='visit')
-    print(ad.train.describe())
-    ad.fit()
-    pickle.dump(ad, open("full_comm_ad.p", "wb"))
-    results = ad.predict()
-    print(results.describe())
+test_trips_df = test_comm.get_trips_df()
+print(test_trips_df.info())
+print(test_trips_df.describe())
+ad = gps_anomaly_detector(test_comm, kind='trip')
+# print(ad.train.describe())
 
-if __name__ == "__main__":
-    main()
+ad.fit()
+print(ad.train.columns)
+# pickle.dump(ad, open("full_comm_ad.p", "wb"))
+# results = ad.predict()
+# print(results.describe())
+# print(len(test_comm.visits))
+# new_visits = test_comm.generate_data(object='visit',n=5)
+# X = pd.DataFrame([visit.as_row() for visit in new_visits])
+# X_pred = ad.predict(X,kind='visit')
+# print(X_pred)
+# print(new_visit.as_row())
+# print(len(test_comm.visits))
+print(len(test_comm.trips))
+new_trips = test_comm.generate_data(object='trip',n=5)
+print(new_trips)
+X = pd.DataFrame([trip.as_row() for trip in new_trips])
+print(X.columns)
+gt_labels = X.pop('label')
+# print(X.describe())
+X_pred2 = ad.predict(X,kind='trip')
+print(X_pred2)
+# print(new_trip.as_row())
+print(len(test_comm.trips))
+# if __name__ == "__main__":
+#     main()
