@@ -52,6 +52,7 @@ def load_location(place='Shanghai, China', pickle_graph=True, pickle_file=None):
 
 full_data, G = load_location(pickle_graph=False)
 
+
 def calculate_great_circle_distance(start_latitude, start_longitude, end_latitude, end_longitude):
     pickup = [start_latitude, start_longitude]
     dropoff = [end_latitude, end_longitude]
@@ -294,7 +295,7 @@ class Trip(object):
         self.duration = self.end_time - self.start_time
         # else:
         #     self.duration = np.nan
-        self.label=label
+        self.label = label
         self.bearing = calculate_bearing(self.start_lat, self.start_lng, self.end_lat, self.end_lng)
         self.mh_dist = calculate_manhattan_distance(self.start_lat, self.start_lng, self.end_lat, self.end_lng)
         self.gc_dist = calculate_great_circle_distance(self.start_lat, self.start_lng, self.end_lat, self.end_lng)
@@ -307,7 +308,7 @@ class Trip(object):
 
     def as_list(self):
         return [self.uid, self.start_time, self.end_time, self.start_lng, self.start_lat, self.end_lng, self.end_lat,
-                self.tid]
+                self.label]
 
     def as_row(self):
         return {
@@ -329,13 +330,14 @@ class Trip(object):
 class Community(object):  # to hold multiple users' trips and visits
     def __init__(self, users=None, data=None, G=None):
         global full_data
+        self.users = None
         if users:
             if isinstance(users, list):
                 if isinstance(users[0], User):
                     self.users = users
                 elif isinstance(users[0], int):
                     self.users = [extract_user(full_data, i) for i in users]
-                    # print(self.users[0])
+                    print(self.users[0])
             else:
                 print("users must be given as a list of User objects or user IDs")
         elif isinstance(data, pd.DataFrame):
@@ -367,11 +369,11 @@ class Community(object):  # to hold multiple users' trips and visits
             new_visit = Visit(uid=user_id, timestamp=timestamp, latitude=latitude, longitude=longitude)
             user.add_visit(new_visit)
 
-    def generate_data(self, object='visit', out_type='outlier', add=True, n=1):
+    def generate_synthetic(self, object_type='visit', out_type='outlier', add=True, n=1):
         results = []
         for i in range(n):
             user = random.choice(self.users)
-            if object == 'visit':
+            if object_type == 'visit':
                 new_visit = generate_visit(user, out_type)
                 if add:
                     user.add_visit(visit=new_visit)
@@ -380,7 +382,7 @@ class Community(object):  # to hold multiple users' trips and visits
                     return new_visit
                 else:
                     results.append(new_visit)
-            elif object == 'trip':
+            elif object_type == 'trip':
                 new_trip = generate_trip(user, out_type)
                 if add:
                     user.add_trips(new_trip)
@@ -392,13 +394,13 @@ class Community(object):  # to hold multiple users' trips and visits
                     results.append(new_trip)
         return results
 
-            # elif object == 'user':
-            #     new_id = max([user.uid for user in self.users]) + 1
-            #     new_user = User(new_id)
-            #     if out_type=='inlier':
-            #         other_trips = [len(user.trips) for user in self.users]
-            #         num_trips = random.randint(min(other_trips),max(other_trips))
-            #         for i in range(num_trips):
+        # elif object == 'user':
+        #     new_id = max([user.uid for user in self.users]) + 1
+        #     new_user = User(new_id)
+        #     if out_type=='inlier':
+        #         other_trips = [len(user.trips) for user in self.users]
+        #         num_trips = random.randint(min(other_trips),max(other_trips))
+        #         for i in range(num_trips):
 
     def transform_time(self, X=None, data_type='trips', inplace=False):
         if data_type == 'trips':
@@ -564,8 +566,12 @@ class User(object):
             print(all_users)
         else:
             all_users = [self.uid]
-        print(all_users)
-        return Community(users=all_users)
+        if all_users:
+            # print(all_users)
+            return Community(users=all_users)
+        else:
+            return None
+
 
     def __repr__(self):
         return f'ID: {self.uid}; Num_trips = {len(self.trips)}'
@@ -585,6 +591,7 @@ class gps_anomaly_detector(object):
         self.models = None
         self.kind = kind
         self.type = None
+        self.X_standardized = None
         if data and isinstance(data, Community):
             self.trip_data = data.get_trips_df()
             self.visit_data = data.get_visits_df()
@@ -597,12 +604,13 @@ class gps_anomaly_detector(object):
             self.visit_data = None
         if not self.train:
             if self.kind == 'trip' and isinstance(self.trip_data, pd.DataFrame):
-                self.train = self.trip_data.drop(['label'],axis=1)
+                self.train = self.trip_data.drop(['uid','label'], axis=1)
             elif self.kind == 'visit' and isinstance(self.visit_data, pd.DataFrame):
-                self.train = self.visit_data.drop(['label'],axis=1)
+                self.train = self.visit_data.drop(['uid','label','vid'], axis=1)
             elif self.kind == 'all' and isinstance(self.visit_data, pd.DataFrame) and isinstance(self.trip_data,
                                                                                                  pd.DataFrame):
-                self.train = [self.trip_data.drop(['label'],axis=1), self.visit_data.drop(['label'],axis=1)]
+                self.train = [self.trip_data.drop(['uid','label'], axis=1)
+                    , self.visit_data.drop(['uid','label','vid'], axis=1)]
             else:
                 self.train = None
 
@@ -647,8 +655,6 @@ class gps_anomaly_detector(object):
                             X1_cols.append(column)
                         elif column in X2.columns:
                             X2_cols.append(column)
-
-
             else:
                 X = self.train
         if columns:
@@ -709,24 +715,41 @@ class gps_anomaly_detector(object):
             if model_type.lower() == 'ensemble':
                 self.model = models
 
-    def predict(self, X=None, kind='visit'):
-        if not isinstance(X,pd.DataFrame):
-            if isinstance(self.train, list):
-                if kind == 'visit':
-                    X = self.train[1]
-                elif kind == 'trip':
-                    X = self.train[0]
+    def predict(self, X=None, kind=None):
+        while not isinstance(X, pd.DataFrame):
+            if isinstance(X,User):
+                if kind == 'visit' or kind is None:
+                    X = X.get_visits_df()
                 else:
-                    X = self.train
-            elif isinstance(self.train, pd.DataFrame):
-                X = self.train
+                    X = X.get_trips_df()
+            elif isinstance(X,Community):
+                if kind == 'visit' or kind is None:
+                    X = X.get_visits_df()
+                if kind == 'trip' or kind is None:
+                    X = X.get_trips_df()
+            elif isinstance(X,Visit):
+                kind = 'visit'
+                X = pd.DataFrame(X.as_row())
+            elif isinstance(X,Trip):
+                kind = 'trip'
+                X = pd.DataFrame(X.as_row())
             else:
-                if kind == 'visit':
-                    X = self.visit_data
-                elif kind == 'trip':
-                    X = self.trip_data
+                if isinstance(self.train, list):
+                    if kind == 'visit':
+                        X = self.train[1]
+                    elif kind == 'trip':
+                        X = self.train[0]
+                    else:
+                        X = self.train
+                elif isinstance(self.train, pd.DataFrame):
+                    X = self.train
                 else:
-                    X = [self.trip_data, self.visit_data]
+                    if kind == 'visit':
+                        X = self.visit_data
+                    elif kind == 'trip':
+                        X = self.trip_data
+                    else:
+                        X = [self.trip_data, self.visit_data]
 
         if self.type == 'ensemble':
             model_preds = {}
@@ -746,67 +769,77 @@ class gps_anomaly_detector(object):
         else:
             return self.model.predict(X)
 
-# def main():
 
-# glob_comm = Community(users=extract_users(full_data))
-# G, nodes, edges = pickle.load(open('shanghai_graph.p', 'rb'))
-# print('extracting users')
-# all_users = extract_users(full_data)
-test_uid = 146
-test_user = extract_user(full_data, test_uid)
-# print(test_user.trips)
-# print(test_user.visits)
-# filtered_df = full_data[full_data.uid == test_uid]
-# trips = extract_trips(filtered_df)
-# print(type(trips[0]))
-# test_user.add_trips(trips)
-# print(len(test_user.trips))
-# test_user.add_connections(member=[180, 211, 196])
-# print(test_user.uid)
-# print(test_user.connections)
-# print(f'extracted {len(all_users)} from data')
-# full_community = pickle.load(open("global_community.p", "rb"))
-# all_trips = Community(users=all_users).trips_df
-test_comm = test_user.to_community()
-# all_trips = test_comm.get_trips_df()
-# print(all_trips.head())
-# all_trips = full_community.trips_df
-# print(len(glob_comm.visits))
-# all_visits = test_user.get_visits_df()
-# print(all_visits.head())
-# print(all_visits.info())
-# print(all_trips.sample(n=10, random_state=3))
-# print(all_visits.sample(n=10, random_state=3))
-# ad = pickle.load(open("full_comm_ad.p", 'rb'))
+def main():
+    # glob_comm = Community(users=extract_users(full_data))
+    # G, nodes, edges = pickle.load(open('shanghai_graph.p', 'rb'))
+    # print('extracting users')
+    # all_users = extract_users(full_data)
+    # test_uid = 146
+    # print(test_uid)
+    # print(type(test_uid))
+    test_uid = int(random.choice(full_data.uid))
+    # print(test_uid)
+    # print(type(test_uid))
+    test_user = extract_user(full_data, test_uid)
+    # print(test_user.trips)
+    # print(test_user.visits)
+    # filtered_df = full_data[full_data.uid == test_uid]
+    # trips = extract_trips(filtered_df)
+    # print(type(trips[0]))
+    # test_user.add_trips(trips)
+    # print(len(test_user.trips))
+    # test_user.add_connections(member=[180, 211, 196])
+    # print(test_user.uid)
+    # print(test_user.connections)
+    # print(f'extracted {len(all_users)} from data')
+    # full_community = pickle.load(open("global_community.p", "rb"))
+    # all_trips = Community(users=all_users).trips_df
+    test_comm = test_user.to_community()
+    # all_trips = test_comm.get_trips_df()
+    # print(all_trips.head())
+    # all_trips = full_community.trips_df
+    # print(len(glob_comm.visits))
+    # all_visits = test_user.get_visits_df()
+    # print(all_visits.head())
+    # print(all_visits.info())
+    # print(all_trips.sample(n=10, random_state=3))
+    # print(all_visits.sample(n=10, random_state=3))
+    # ad = pickle.load(open("full_comm_ad.p", 'rb'))
 
-test_trips_df = test_comm.get_trips_df()
-print(test_trips_df.info())
-print(test_trips_df.describe())
-ad = gps_anomaly_detector(test_comm, kind='trip')
-# print(ad.train.describe())
+    # test_trips_df = test_comm.get_trips_df()
+    # print(test_trips_df.info())
+    # print(test_trips_df.describe())
+    ad = gps_anomaly_detector(test_comm)
+    # print(ad.train.describe())
 
-ad.fit()
-print(ad.train.columns)
-# pickle.dump(ad, open("full_comm_ad.p", "wb"))
-# results = ad.predict()
-# print(results.describe())
-# print(len(test_comm.visits))
-# new_visits = test_comm.generate_data(object='visit',n=5)
-# X = pd.DataFrame([visit.as_row() for visit in new_visits])
-# X_pred = ad.predict(X,kind='visit')
-# print(X_pred)
-# print(new_visit.as_row())
-# print(len(test_comm.visits))
-print(len(test_comm.trips))
-new_trips = test_comm.generate_data(object='trip',n=5)
-print(new_trips)
-X = pd.DataFrame([trip.as_row() for trip in new_trips])
-print(X.columns)
-gt_labels = X.pop('label')
-# print(X.describe())
-X_pred2 = ad.predict(X,kind='trip')
-print(X_pred2)
-# print(new_trip.as_row())
-print(len(test_comm.trips))
-# if __name__ == "__main__":
-#     main()
+    ad.fit()
+    print(ad.train[0].info())
+    print(ad.train[1].describe())
+
+    # pickle.dump(ad, open("full_comm_ad.p", "wb"))
+    results = ad.predict()
+    print(results.describe())
+    # print(len(test_comm.visits))
+    # new_visits = test_comm.generate_data(object='visit',n=5)
+    # X = pd.DataFrame([visit.as_row() for visit in new_visits])
+    # X_pred = ad.predict(X,kind='visit')
+    # print(X_pred)
+    # print(new_visit.as_row())
+    # print(len(test_comm.visits))
+
+    # print(len(test_comm.trips))
+    # new_trips = test_comm.generate_data(object='trip', n=5)
+    # print(new_trips)
+    # X = pd.DataFrame([trip.as_row() for trip in new_trips])
+    # print(X.columns)
+    # gt_labels = X.pop('label')
+    # # print(X.describe())
+    # X_pred2 = ad.predict(X, kind='trip')
+    # print(X_pred2)
+    # # print(new_trip.as_row())
+    # print(len(test_comm.trips))
+
+
+if __name__ == "__main__":
+    main()
