@@ -433,6 +433,41 @@ class Community(object):  # to hold multiple users' trips and visits
                 self.train = X
         return X
 
+def generate_visit(visits_df, current_kind='inlier', new_user=False, new_ids=None)
+    if new_user:
+        uid = visits_df.uid.unique().max() + 1
+        while uid in new_ids:
+            uid += 1
+        new_ids.append(uid)
+        user_df = visits_df.sample(n=random.uniform(0, 50))
+    else:
+        uid = random.choice(visits_df.uid.unique())
+        user_df = visits_df[visits_df.uid == uid]
+    if current_kind == 'inlier':
+        if not new_user:
+            visits_df = user_df
+        temp_visit = visits_df.sample()
+        new_lat = temp_visit.latitude.values
+        new_lng = temp_visit.longitude.values
+        label = 1
+    new_timestamp = None
+    while not new_timestamp or new_timestamp in user_df.timestamp:
+        new_timestamp = random.randint(visits_df.timestamp.min(), visits_df.timestamp.max() + 31536000)
+    if current_kind == 'cross':
+        temp_visit = visits_df[visits_df.uid != uid].sample()
+        new_lat = temp_visit.latitude.values
+        new_lng = temp_visit.longitude.values
+        label = 0
+    else:
+        lat_min = visits_df.latitude.min()
+        lat_max = visits_df.latitude.max()
+        lng_min = visits_df.longitude.min()
+        lng_max = visits_df.longitude.max()
+        new_lat = random.choice([random.uniform(lat_max, 90), random.uniform(-90, lat_min)])
+        new_lng = random.choice([random.uniform(lng_max, 180), random.uniform(-180, lng_min)])
+        label = 0
+    new_visit = [uid, new_timestamp, new_lat, new_lng]
+return new_visit, label, new_ids
 
 class User(object):
     def __init__(self, id=0, trips=None, locations=None, visits=None, connected_users=None):
