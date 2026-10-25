@@ -1,0 +1,6 @@
+# Local development and notebook-generated artifacts
+.idea/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+cache/
