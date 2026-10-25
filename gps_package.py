@@ -1,4 +1,5 @@
 import datetime
+import os
 import pickle
 import random
 
@@ -27,8 +28,14 @@ full_data = None
 G = None
 
 
-def load_location(place='Shanghai, China', pickle_graph=True, pickle_file=None):
-    """Load the GPS dataset and place graph into the module's default state."""
+def load_location(place='Shanghai, China', pickle_graph=True, pickle_file=None, data_file=None):
+    """Load a local GPS workbook and the place graph into the module's default state."""
+    data_path = data_file or os.environ.get('GPS_DATA_PATH', 'shanghai_gps.xlsx')
+    if not os.path.isfile(data_path):
+        raise FileNotFoundError(
+            f"GPS workbook not found at '{data_path}'. Download it from "
+            "https://doi.org/10.21227/fqe8-db87 and set GPS_DATA_PATH to its path."
+        )
     if pickle_file:
         pickle_path = pickle_file
     else:
@@ -45,7 +52,7 @@ def load_location(place='Shanghai, China', pickle_graph=True, pickle_file=None):
     print(f'loaded graph for {place}')
     print('loading data')
     global full_data
-    full_data = pd.read_excel('shanghai_gps.xlsx', skiprows=6, header=0)
+    full_data = pd.read_excel(data_path, skiprows=6, header=0)
     full_data.columns = ['_'.join(name.lower()
                                   .translate(str.maketrans(' ', ' ', string.punctuation)).split()) for name in
                          full_data.columns]
@@ -770,7 +777,8 @@ class gps_anomaly_detector(object):
             return self.model.predict(X)
 
 
-def main():
+def main(data_file=None):
+    load_location(data_file=data_file)
     # glob_comm = Community(users=extract_users(full_data))
     # G, nodes, edges = pickle.load(open('shanghai_graph.p', 'rb'))
     # print('extracting users')
@@ -842,4 +850,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(data_file=os.environ.get('GPS_DATA_PATH'))

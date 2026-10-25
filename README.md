@@ -19,12 +19,18 @@ These are the methods present in the source, not a claim that a complete analysi
 
 ## Data and external services
 
-The analysis uses [Multiday GPS tracking data of Shanghai](https://doi.org/10.21227/fqe8-db87), hosted by IEEE DataPort and included in the repository as `shanghai_gps.xlsx`. The notebooks also retrieve Shanghai road-network data through OSMnx, and some cells use Nominatim for geocoding. Consult the dataset record for current access and reuse terms.
+The analysis uses [Multiday GPS tracking data of Shanghai](https://doi.org/10.21227/fqe8-db87), hosted by IEEE DataPort. Download the workbook from the dataset record and consult its current access and reuse terms. The workbook is not included in this repository; no automatic download is performed.
 
-`gps_package.load_location()` explicitly loads the workbook and graph. If the local graph pickle cannot be loaded, it may request a graph from OSMnx; by default, it may also save the graph as a pickle. Pickle deserialization can execute code, so only load serialized files from sources you trust.
+Set `GPS_DATA_PATH` to the path of your downloaded workbook. If unset, the package looks for `shanghai_gps.xlsx` in the current working directory. For example, in PowerShell:
+
+```powershell
+$env:GPS_DATA_PATH = 'C:\path\to\shanghai_gps.xlsx'
+```
+
+`gps_package.load_location()` loads the workbook and graph; running `gps_package.py` initializes them explicitly. If the local graph pickle cannot be loaded, the package may request a graph from OSMnx; by default, it may also save a graph pickle. Pickle deserialization can execute code, so only load serialized files from sources you trust. The notebooks also retrieve Shanghai road-network data through OSMnx, and some cells use Nominatim for geocoding.
 
 ## Setup and reproducibility
 
 There is no dependency manifest or pinned environment in the repository. Dependencies are inferred from imports in the package and notebooks, and the notebook environment requires additional geospatial and plotting packages. A clean, end-to-end notebook or model run has not been verified.
 
-The package parses and its focused import-safety regression test passes with synthetic dependency stubs. This does not verify workbook or graph loading, notebook execution, or model behavior. Existing saved notebook outputs are not a substitute for a clean run.
+The package parses and focused import-safety and configured-workbook-path regression tests pass with synthetic dependencies. These do not verify loading the source workbook or graph, notebook execution, or model behavior. Existing saved notebook outputs are not a substitute for a clean run.
