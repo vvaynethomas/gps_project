@@ -1,4 +1,5 @@
 import datetime
+import os
 import pickle
 import random
 
@@ -27,8 +28,14 @@ full_data = None
 G = None
 
 
-def load_location(place='Shanghai, China', pickle_graph=True, pickle_file=None):
-    """Load the GPS dataset and place graph into the module's default state."""
+def load_location(place='Shanghai, China', pickle_graph=True, pickle_file=None, data_file=None):
+    """Load a local GPS workbook and the place graph into the module's default state."""
+    data_path = data_file or os.environ.get('GPS_DATA_PATH', 'shanghai_gps.xlsx')
+    if not os.path.isfile(data_path):
+        raise FileNotFoundError(
+            f"GPS workbook not found at '{data_path}'. Download it from "
+            "https://doi.org/10.21227/fqe8-db87 and set GPS_DATA_PATH to its path."
+        )
     if pickle_file:
         pickle_path = pickle_file
     else:
@@ -45,7 +52,7 @@ def load_location(place='Shanghai, China', pickle_graph=True, pickle_file=None):
     print(f'loaded graph for {place}')
     print('loading data')
     global full_data
-    full_data = pd.read_excel('shanghai_gps.xlsx', skiprows=6, header=0)
+    full_data = pd.read_excel(data_path, skiprows=6, header=0)
     full_data.columns = ['_'.join(name.lower()
                                   .translate(str.maketrans(' ', ' ', string.punctuation)).split()) for name in
                          full_data.columns]
@@ -71,6 +78,11 @@ def calculate_manhattan_distance(start_latitude, start_longitude, end_latitude, 
 
 
 def calculate_bearing(start_latitude, start_longitude, end_latitude, end_longitude):
+    """Return a bearing in radians from latitude/longitude coordinates in degrees."""
+    start_latitude = math.radians(start_latitude)
+    end_latitude = math.radians(end_latitude)
+    start_longitude = math.radians(start_longitude)
+    end_longitude = math.radians(end_longitude)
     d_lon = end_longitude - start_longitude
     y = math.sin(d_lon) * math.cos(end_latitude)
     x = math.cos(start_latitude) * math.sin(end_latitude) - math.sin(start_latitude) * math.cos(
@@ -422,7 +434,7 @@ class Community(object):  # to hold multiple users' trips and visits
                 X.drop(['start_time_in_seconds', 'end_time_in_seconds'], axis=1, inplace=True)
                 self.train = X
         elif data_type == 'visits':
-            X = self.get_visits_df.copy()
+            X = self.get_visits_df().copy()
             X['timestamp_dt'] = pd.to_datetime(X['timestamp'], unit='s')
             X['month'] = X['timestamp_dt'].dt.month
             X['day'] = X['timestamp_dt'].dt.day
@@ -445,7 +457,7 @@ class User(object):
             start_points = [trip.start_loc for trip in trips]
             end_points = [trip.end_loc for trip in trips]
             self.locations = self.locations + start_points + end_points
-            self.visits = self.visits + [trip.visits for trip in trips]
+            self.visits = self.visits + [visit for trip in trips for visit in trip.visits]
         if locations:
             self.locations = list(set(self.locations + locations))
             self.visits = self.visits + [Visit(uid=self.uid, latitude=loca[0], longitude=loca[1]) for loca in locations]
@@ -457,14 +469,6 @@ class User(object):
         elif locations:
             self.locations = locations
             self.trips = permutations(locations, 2)
-        if visits:
-            self.visits = self.visits + visits
-
-        else:
-            self.trips = []
-            self.visits = []
-            self.locations = []
-
         if connected_users:
             if isinstance(connected_users[0], int):
                 self.connections = [extract_user(full_data, id) for id in connected_users]
@@ -770,7 +774,8 @@ class gps_anomaly_detector(object):
             return self.model.predict(X)
 
 
-def main():
+def main(data_file=None):
+    load_location(data_file=data_file)
     # glob_comm = Community(users=extract_users(full_data))
     # G, nodes, edges = pickle.load(open('shanghai_graph.p', 'rb'))
     # print('extracting users')
@@ -842,4 +847,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(data_file=os.environ.get('GPS_DATA_PATH'))
