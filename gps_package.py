@@ -78,6 +78,11 @@ def calculate_manhattan_distance(start_latitude, start_longitude, end_latitude, 
 
 
 def calculate_bearing(start_latitude, start_longitude, end_latitude, end_longitude):
+    """Return a bearing in radians from latitude/longitude coordinates in degrees."""
+    start_latitude = math.radians(start_latitude)
+    end_latitude = math.radians(end_latitude)
+    start_longitude = math.radians(start_longitude)
+    end_longitude = math.radians(end_longitude)
     d_lon = end_longitude - start_longitude
     y = math.sin(d_lon) * math.cos(end_latitude)
     x = math.cos(start_latitude) * math.sin(end_latitude) - math.sin(start_latitude) * math.cos(
@@ -429,7 +434,7 @@ class Community(object):  # to hold multiple users' trips and visits
                 X.drop(['start_time_in_seconds', 'end_time_in_seconds'], axis=1, inplace=True)
                 self.train = X
         elif data_type == 'visits':
-            X = self.get_visits_df.copy()
+            X = self.get_visits_df().copy()
             X['timestamp_dt'] = pd.to_datetime(X['timestamp'], unit='s')
             X['month'] = X['timestamp_dt'].dt.month
             X['day'] = X['timestamp_dt'].dt.day
@@ -452,7 +457,7 @@ class User(object):
             start_points = [trip.start_loc for trip in trips]
             end_points = [trip.end_loc for trip in trips]
             self.locations = self.locations + start_points + end_points
-            self.visits = self.visits + [trip.visits for trip in trips]
+            self.visits = self.visits + [visit for trip in trips for visit in trip.visits]
         if locations:
             self.locations = list(set(self.locations + locations))
             self.visits = self.visits + [Visit(uid=self.uid, latitude=loca[0], longitude=loca[1]) for loca in locations]
@@ -464,14 +469,6 @@ class User(object):
         elif locations:
             self.locations = locations
             self.trips = permutations(locations, 2)
-        if visits:
-            self.visits = self.visits + visits
-
-        else:
-            self.trips = []
-            self.visits = []
-            self.locations = []
-
         if connected_users:
             if isinstance(connected_users[0], int):
                 self.connections = [extract_user(full_data, id) for id in connected_users]
