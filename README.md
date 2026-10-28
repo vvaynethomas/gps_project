@@ -1,36 +1,77 @@
-# GPS trip analysis research prototype
+# GPS trip and visit anomaly exploration
 
-This repository contains an exploratory GPS trip and visit analysis project. It preserves the original notebooks and methods; it is not a maintained or independently reproduced application. The notebooks explore spatial and temporal feature engineering and unsupervised anomaly-detection methods. No performance or operational claims are made here.
+How can the timing and geography of everyday trips help identify unusual visits? This exploratory Python project uses Shanghai GPS trip records to study that question through spatial feature engineering, road-network context, and unsupervised anomaly detection.
 
-## Notebooks
+The project connects individual **visits** (a location and timestamp) into **trips**, groups trips by **user** and **community**, and experiments with models for distinguishing ordinary observations from synthetic anomalies. It is a research prototype, not a finished tracking application.
 
-- [`final_notebook.ipynb`](final_notebook.ipynb) is the best starting point for the main experiment. It loads the Shanghai GPS workbook, builds a road graph through OSMnx, engineers trip and visit features, explores synthetic visit anomalies, and compares unsupervised models.
-- [`eda.ipynb`](eda.ipynb) contains exploratory spatial and temporal analysis, trip feature engineering, and model experiments. Some cells make live OSMnx or Nominatim requests.
-- [`package_demo.ipynb`](package_demo.ipynb) demonstrates the Python module and community/anomaly-detector objects, including cells that load serialized Python objects.
+## Start exploring
 
-Notebook outputs and execution counts are saved historical artifacts, not evidence that the notebooks run from a clean environment today.
+You can read the notebooks on GitHub without downloading the dataset or running any code.
 
-## Code and methods
+| Entry point | What to explore |
+| --- | --- |
+| [`final_notebook.ipynb`](final_notebook.ipynb) | Start here for the main experiment: data loading, trip and visit features, synthetic visit anomalies, dimensionality reduction, and model comparisons. |
+| [`eda.ipynb`](eda.ipynb) | Earlier spatial and temporal exploration, maps, trip feature engineering, and model experiments. |
+| [`package_demo.ipynb`](package_demo.ipynb) | Examples of the module's user/community objects, synthetic trip generation, and detector usage. Some cells load saved Python objects. |
+| [`gps_package.py`](gps_package.py) | The reusable pieces: `Visit`, `Trip`, `User`, `Community`, distance/bearing helpers, workbook loading, and `gps_anomaly_detector`. |
+| [`tests/`](tests/) | Focused regression tests for import safety, workbook-path configuration, bearings, visit times, and trip retention, using synthetic dependencies. |
+| [`app_attempt1.py`](app_attempt1.py) | An unfinished Kivy UI stub, not an analysis entry point. |
 
-- [`gps_package.py`](gps_package.py) defines `Visit`, `Trip`, `User`, `Community`, data-loading helpers, and `gps_anomaly_detector`. The work explores time-derived features, bearings, great-circle and Manhattan distances, nearest road-network nodes, and Isolation Forest, Elliptic Envelope, Bayesian Gaussian Mixture, and One-Class SVM models. The notebooks also explore scaling, PCA, and synthetic visit examples.
-- [`app_attempt1.py`](app_attempt1.py) is a minimal Kivy application stub, not a documented analysis interface.
+## Analysis workflow
 
-These are the methods present in the source, not a claim that a complete analysis or any model result has been reproduced.
+The main notebook follows this path:
 
-## Data and external services
+1. **Load trip records.** Read the Shanghai Excel workbook, skip its six introductory rows, and normalize column names.
+2. **Build spatial and temporal features.** Derive calendar/time-of-day fields, trip duration, bearing, great-circle and Manhattan distances, and nearest road-network nodes using OSMnx.
+3. **Represent visits.** Separate trip starts and ends into timestamped locations and explore their distribution on the road network.
+4. **Create comparison examples.** Generate synthetic visit anomalies and split ordinary visits into training and test sets.
+5. **Compare unsupervised models.** Explore scaling and PCA, including two-component and 99%-variance representations, with Isolation Forest, Elliptic Envelope, and One-Class SVM. The Python module also includes Bayesian Gaussian Mixture experiments.
 
-The analysis uses [Multiday GPS tracking data of Shanghai](https://doi.org/10.21227/fqe8-db87), hosted by IEEE DataPort. Download the workbook from the dataset record and consult its current access and reuse terms. The workbook is not included in this repository; no automatic download is performed.
+The notebooks contain maps, feature exploration, and model-comparison outputs. Those saved outputs document earlier experiments; they are not independently reproduced benchmarks, and synthetic anomalies do not establish accuracy on real-world anomalous behavior.
 
-Set `GPS_DATA_PATH` to the path of your downloaded workbook. If unset, the package looks for `shanghai_gps.xlsx` in the current working directory. For example, in PowerShell:
+## Explore locally
+
+### Environment
+
+Use an isolated Python environment and a Jupyter notebook interface. There is no dependency manifest, pinned environment, or verified Python/package version combination in this repository.
+
+Dependencies visible in the source include:
+
+| Area | Packages |
+| --- | --- |
+| Core analysis module | NumPy, pandas, Matplotlib, geopy, OSMnx, scikit-learn |
+| Notebook exploration | Jupyter, GeoPandas, MovingPandas, Shapely, pyproj, SciPy, seaborn, geoplot, category-encoders |
+| Workbook loading | An Excel reader compatible with pandas and `.xlsx` files, such as openpyxl |
+
+Treat this as a dependency starting point, not a tested installation recipe. Some notebook cells use older library APIs and may require adaptation to your environment.
+
+### Data
+
+The analysis uses [Multiday GPS tracking data of Shanghai](https://doi.org/10.21227/fqe8-db87), hosted by IEEE DataPort. Obtain the workbook from that record and consult its current access and reuse terms. The workbook is not included here, and the code does not download it automatically.
+
+From the repository root, set the path before launching Jupyter so the notebook kernel inherits it. For example, in PowerShell, with your environment already activated:
 
 ```powershell
 $env:GPS_DATA_PATH = 'C:\path\to\shanghai_gps.xlsx'
+jupyter notebook
 ```
 
-`gps_package.load_location()` loads the workbook and graph; running `gps_package.py` initializes them explicitly. If the local graph pickle cannot be loaded, the package may request a graph from OSMnx; by default, it may also save a graph pickle. Pickle deserialization can execute code, so only load serialized files from sources you trust. The notebooks also retrieve Shanghai road-network data through OSMnx, and some cells use Nominatim for geocoding.
+Open `final_notebook.ipynb` and inspect the cells before running them. Both analysis notebooks and the module use `GPS_DATA_PATH`; if it is unset, they look for `shanghai_gps.xlsx` in the current working directory. The loader expects the source workbook's layout, including user IDs, start/end timestamps in seconds, and start/end coordinates, rather than an arbitrary GPS export.
 
-## Setup and reproducibility
+For module exploration, loading is explicit:
 
-There is no dependency manifest or pinned environment in the repository. Dependencies are inferred from imports in the package and notebooks, and the notebook environment requires additional geospatial and plotting packages. A clean, end-to-end notebook or model run has not been verified.
+```python
+import gps_package as gps
 
-The package parses and focused import-safety and configured-workbook-path regression tests pass with synthetic dependencies. These do not verify loading the source workbook or graph, notebook execution, or model behavior. Existing saved notebook outputs are not a substitute for a clean run.
+data, graph = gps.load_location(pickle_graph=False)
+```
+
+Importing the module alone does not read the workbook or request a graph. `load_location()` first attempts to load a local graph pickle, then requests a driving graph through OSMnx if that fails. `pickle_graph=False` prevents saving the graph; it does **not** prevent loading an existing pickle or making a network request. Running `gps_package.py` directly also starts a data-dependent model experiment, so it is not a setup check.
+
+### Reproduction boundaries
+
+The notebooks make live OSMnx requests for Shanghai road networks, and some exploration cells use Nominatim geocoding. The main notebook uses a walking graph, while the module defaults to a driving graph, so their spatial context is not identical.
+
+The repository also contains saved graph/detector pickle files. Pickle loading can execute code: inspect the loading cells and use only files you trust. Saved objects can depend on the library versions that created them.
+
+A clean end-to-end notebook or model run has not been verified. The focused tests do not establish workbook/graph compatibility or model quality; browsing the notebooks and source is the simplest way to explore the project without reconstructing the original environment.
