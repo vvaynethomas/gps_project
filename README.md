@@ -1,77 +1,90 @@
-# GPS trip and visit anomaly exploration
+# Spotting unusual visits in multiday GPS travel diaries
 
-How can the timing and geography of everyday trips help identify unusual visits? This exploratory Python project uses Shanghai GPS trip records to study that question through spatial feature engineering, road-network context, and unsupervised anomaly detection.
+Can a model trained only on where and when people normally go flag a visit that doesn't fit, such as someone turning up somewhere they have never been, at an hour they never travel? This project builds that experiment on the Shanghai multiday GPS study: 281 participants, 10,408 trip and activity records, and 20,816 timestamped visits, scored by four unsupervised detectors.
 
-The project connects individual **visits** (a location and timestamp) into **trips**, groups trips by **user** and **community**, and experiments with models for distinguishing ordinary observations from synthetic anomalies. It is a research prototype, not a finished tracking application.
+## What it found
 
-## Start exploring
+**Out-of-place locations are easy. Plausible places visited by the wrong person are the hard case.**
 
-You can read the notebooks on GitHub without downloading the dataset or running any code.
+Rerunning the full experiment with `pipeline.py` (no road-network features, seed 13, 2,000 synthetic anomalies):
 
-| Entry point | What to explore |
-| --- | --- |
-| [`final_notebook.ipynb`](final_notebook.ipynb) | Start here for the main experiment: data loading, trip and visit features, synthetic visit anomalies, dimensionality reduction, and model comparisons. |
-| [`eda.ipynb`](eda.ipynb) | Earlier spatial and temporal exploration, maps, trip feature engineering, and model experiments. |
-| [`package_demo.ipynb`](package_demo.ipynb) | Examples of the module's user/community objects, synthetic trip generation, and detector usage. Some cells load saved Python objects. |
-| [`gps_package.py`](gps_package.py) | The reusable pieces: `Visit`, `Trip`, `User`, `Community`, distance/bearing helpers, workbook loading, and `gps_anomaly_detector`. |
-| [`tests/`](tests/) | Focused regression tests for import safety, workbook-path configuration, bearings, visit times, and trip retention, using synthetic dependencies. |
-| [`app_attempt1.py`](app_attempt1.py) | An unfinished Kivy UI stub, not an analysis entry point. |
+| Detector | False alarms on held-out real visits | Caught: visit far outside the study area | Caught: another participant's real location |
+| --- | ---: | ---: | ---: |
+| Elliptic Envelope (empirical covariance) | 0.00% | 100% | 0% |
+| Elliptic Envelope (robust covariance) | 0.00% | 100% | 0% |
+| Isolation Forest | 0.02% | 100% | 0% |
+| One-Class SVM | 8.7% | 100% | 47.5% |
 
-## Analysis workflow
+The covariance and Isolation Forest models, tuned to an expected anomaly rate of about 5 in a million (the abduction-rate prior used throughout), almost never raise a false alarm and catch every visit that lands outside the participants' range. None of them notices a participant appearing at a place that another participant visits. The One-Class SVM catches nearly half of those swaps, at the cost of flagging about 1 in 11 ordinary visits. Full numbers are in [`docs/results_shanghai.json`](docs/results_shanghai.json).
 
-The main notebook follows this path:
+The original notebook run (with nearest walking-network node features from OSMnx) reported the same split between models: the covariance models and Isolation Forest flagged 1 of 15,612 training visits and 0 of 5,204 held-out visits, the One-Class SVM flagged 1,362 (8.7%) and 460 (8.8%), and all four caught all 2,000 synthetic visits. Its visit generator passed latitude and longitude in swapped order, so every synthetic visit landed far from Shanghai; `pipeline.py` fixes that, which is what exposes the cross-participant case.
 
-1. **Load trip records.** Read the Shanghai Excel workbook, skip its six introductory rows, and normalize column names.
-2. **Build spatial and temporal features.** Derive calendar/time-of-day fields, trip duration, bearing, great-circle and Manhattan distances, and nearest road-network nodes using OSMnx.
-3. **Represent visits.** Separate trip starts and ends into timestamped locations and explore their distribution on the road network.
-4. **Create comparison examples.** Generate synthetic visit anomalies and split ordinary visits into training and test sets.
-5. **Compare unsupervised models.** Explore scaling and PCA, including two-component and 99%-variance representations, with Isolation Forest, Elliptic Envelope, and One-Class SVM. The Python module also includes Bayesian Gaussian Mixture experiments.
+![Detector boundaries on two principal components](docs/figures/decision_boundaries.png)
 
-The notebooks contain maps, feature exploration, and model-comparison outputs. Those saved outputs document earlier experiments; they are not independently reproduced benchmarks, and synthetic anomalies do not establish accuracy on real-world anomalous behavior.
+Squeezed onto two principal components, the synthetic anomalies sit inside every detector's boundary. They only separate in the 15 components that keep 99% of the variance, which is the space the table above is scored in.
 
-## Explore locally
+### The travel behind it
 
-### Environment
+- 4,907 trips and 5,501 activities, a median of 34 records per participant, recorded from October 2013 to December 2015, most of them from April 2014 on.
+- The median trip lasts 19.5 minutes and covers 2.7 km in a straight line; one trip in ten goes further than 14.9 km.
+- Mode share: walking 23%, bus 22%, car 20%, subway 15%, bicycle 8%, e-bicycle 5%, shuttle 3%, other 4%.
+- Weekday trips peak sharply at 7–9 am and 5–7 pm. Weekend trips spread across the day.
 
-Use an isolated Python environment and a Jupyter notebook interface. There is no dependency manifest, pinned environment, or verified Python/package version combination in this repository.
+![Trip start times, weekdays against weekends](docs/figures/trip_starts_by_hour.png)
 
-Dependencies visible in the source include:
+## Approach
 
-| Area | Packages |
-| --- | --- |
-| Core analysis module | NumPy, pandas, Matplotlib, geopy, OSMnx, scikit-learn |
-| Notebook exploration | Jupyter, GeoPandas, MovingPandas, Shapely, pyproj, SciPy, seaborn, geoplot, category-encoders |
-| Workbook loading | An Excel reader compatible with pandas and `.xlsx` files, such as openpyxl |
+1. **Records to features.** Each trip gets its duration, calendar fields (month, day, weekday, hour, minute), great-circle and Manhattan distance, and bearing.
+2. **Trips to visits.** Every record's start and end become two timestamped visits: who, where, when.
+3. **Synthetic anomalies.** Two kinds, generated per participant at a random time up to a year past the end of the study: *displaced* visits at coordinates outside the study area's bounding box, and *cross* visits at a real location belonging to a different participant.
+4. **Encoding and reduction.** Participant IDs (and nearest road-network nodes, with `--road-network`) are hash-encoded into 8 columns; features are standardised and reduced with PCA to 99% of the variance.
+5. **Detectors.** Elliptic Envelope (empirical and robust covariance), Isolation Forest and One-Class SVM are fit on 75% of real visits and scored on the other 25% and on the synthetic set.
 
-Treat this as a dependency starting point, not a tested installation recipe. Some notebook cells use older library APIs and may require adaptation to your environment.
+`gps_package.py` holds the object model the notebooks grew out of: `Visit`, `Trip`, `User` and `Community` classes, distance and bearing helpers, synthetic trip generation, and a `gps_anomaly_detector` wrapper with an Isolation Forest / Elliptic Envelope / Bayesian Gaussian Mixture / One-Class SVM ensemble.
 
-### Data
+## Get the data
 
-The analysis uses [Multiday GPS tracking data of Shanghai](https://doi.org/10.21227/fqe8-db87), hosted by IEEE DataPort. Obtain the workbook from that record and consult its current access and reuse terms. The workbook is not included here, and the code does not download it automatically.
+The data is the [Multiday GPS tracking data of Shanghai](https://doi.org/10.21227/fqe8-db87) on IEEE DataPort (DOI 10.21227/fqe8-db87), downloaded under the terms on that page. Sign in, download the Excel workbook, then install it:
 
-From the repository root, set the path before launching Jupyter so the notebook kernel inherits it. For example, in PowerShell, with your environment already activated:
-
-```powershell
-$env:GPS_DATA_PATH = 'C:\path\to\shanghai_multiday_gps.xlsx'
-jupyter notebook
+```bash
+python scripts/prepare_data.py ~/Downloads/<workbook>.xlsx
 ```
 
-Open `final_notebook.ipynb` and inspect the cells before running them. Both analysis notebooks and the module use `GPS_DATA_PATH`; if it is unset, they look for `shanghai_multiday_gps.xlsx` in the current working directory. The loader expects the source workbook's layout, including user IDs, start/end timestamps in seconds, and start/end coordinates, rather than an arbitrary GPS export.
+This checks the first sheet's header, prints the record and participant counts (10,408 and 281 for the version used here), compares the SHA-256 with that version (`aaf900db…080f`), and copies the file to `data/shanghai_multiday_gps.xlsx`. Only the first sheet, the trip and activity records, is read.
 
-For module exploration, loading is explicit:
+No account? Generate a synthetic workbook with the same layout and run everything on that:
 
-```python
-import gps_package as gps
-
-data, graph = gps.load_location(pickle_graph=False)
+```bash
+python scripts/make_sample_data.py            # data/sample_gps.xlsx: 40 participants, ~2,600 records
 ```
 
-Importing the module alone does not read the workbook or request a graph. `load_location()` first attempts to load a local graph pickle, then requests a driving graph through OSMnx if that fails. `pickle_graph=False` prevents saving the graph; it does **not** prevent loading an existing pickle or making a network request. Running `gps_package.py` directly also starts a data-dependent model experiment, so it is not a setup check.
+## Run it
 
-### Reproduction boundaries
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 
-The notebooks make live OSMnx requests for Shanghai road networks, and some exploration cells use Nominatim geocoding. The main notebook uses a walking graph, while the module defaults to a driving graph, so their spatial context is not identical.
+python scripts/prepare_data.py ~/Downloads/<workbook>.xlsx   # or: python scripts/make_sample_data.py
+python pipeline.py                                          # or: python pipeline.py --data data/sample_gps.xlsx
+python -m unittest discover -s tests
+```
 
-The repository also contains saved graph/detector pickle files. Pickle loading can execute code: inspect the loading cells and use only files you trust. Saved objects can depend on the library versions that created them.
+`pipeline.py` takes about 15 seconds on the full dataset and writes `outputs/metrics.json`, `outputs/figures/trip_starts_by_hour.png` and `outputs/figures/decision_boundaries.png`. Add `--road-network` to download Shanghai's walking network with OSMnx and include each visit's nearest node and distance to it, as the notebook did (the download is large and takes several minutes). `--synthetic`, `--seed` and `--output-dir` change the rest.
 
-A clean end-to-end notebook or model run has not been verified. The focused tests do not establish workbook/graph compatibility or model quality; browsing the notebooks and source is the simplest way to explore the project without reconstructing the original environment.
+The tests run without any dependencies installed (the module tests stub them); with `requirements.txt` installed they also run the pipeline end to end on a small synthetic workbook and check the road-network features on a toy graph.
+
+The notebooks read `GPS_DATA_PATH` or default to `data/shanghai_multiday_gps.xlsx`. They were written against 2021-era libraries; `requirements-notebooks.txt` pins that environment (Python 3.8).
+
+## Layout
+
+```
+pipeline.py                 end-to-end experiment: features, synthetic anomalies, detectors, metrics, figures
+gps_package.py              Visit / Trip / User / Community objects, helpers, gps_anomaly_detector
+scripts/prepare_data.py     validate the downloaded workbook and install it in data/
+scripts/make_sample_data.py synthetic workbook with the source layout
+final_notebook.ipynb        the main experiment as originally run, with its plots and model comparison
+eda.ipynb                   earlier exploration: distributions, road-network visit counts, first models
+package_demo.ipynb          gps_package walkthrough: users, communities, synthetic trips, detector
+docs/                       figures and metrics from the full-data run
+tests/                      module tests (stubbed dependencies) and pipeline tests
+```

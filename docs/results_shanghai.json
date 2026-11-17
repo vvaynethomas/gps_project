@@ -1,0 +1,63 @@
+{
+  "records": 10408,
+  "participants": 281,
+  "visits": 20816,
+  "train_visits": 15612,
+  "test_visits": 5204,
+  "synthetic_visits": {
+    "cross": 667,
+    "displaced": 1333
+  },
+  "features_before_pca": 16,
+  "pca_components_99pct": 15,
+  "road_network_features": false,
+  "anomaly_fraction": 5.36986301369863e-06,
+  "travel": {
+    "trips": 4907,
+    "activities": 5501,
+    "records_per_participant_median": 34.0,
+    "trip_duration_min_median": 19.5,
+    "trip_distance_km_median": 2.7,
+    "trip_distance_km_p90": 14.91,
+    "mode_share": {
+      "walk": 0.229,
+      "bus": 0.218,
+      "car": 0.204,
+      "subway": 0.152,
+      "bicycle": 0.076,
+      "e-bicycle": 0.054,
+      "other": 0.037,
+      "shuttle": 0.029
+    }
+  },
+  "models": {
+    "empirical_covariance": {
+      "false_positive_rate_train": 6e-05,
+      "false_positive_rate_test": 0.0,
+      "detection_rate_synthetic": 0.6665,
+      "detection_rate_cross": 0.0,
+      "detection_rate_displaced": 1.0
+    },
+    "robust_covariance": {
+      "false_positive_rate_train": 6e-05,
+      "false_positive_rate_test": 0.0,
+      "detection_rate_synthetic": 0.6665,
+      "detection_rate_cross": 0.0,
+      "detection_rate_displaced": 1.0
+    },
+    "isolation_forest": {
+      "false_positive_rate_train": 0.0,
+      "false_positive_rate_test": 0.00019,
+      "detection_rate_synthetic": 0.6665,
+      "detection_rate_cross": 0.0,
+      "detection_rate_displaced": 1.0
+    },
+    "one_class_svm": {
+      "false_positive_rate_train": 0.0898,
+      "false_positive_rate_test": 0.08743,
+      "detection_rate_synthetic": 0.825,
+      "detection_rate_cross": 0.47526,
+      "detection_rate_displaced": 1.0
+    }
+  }
+}
