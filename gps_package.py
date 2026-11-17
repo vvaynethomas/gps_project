@@ -1,63 +1,70 @@
+"""Trip, visit and community objects plus anomaly detectors for multiday GPS records."""
 import datetime
+import math
 import os
 import pickle
 import random
-
-import matplotlib.pyplot as plt
-import matplotlib
-import pandas as pd
-import numpy as np
-from itertools import permutations
-from geopy import distance as geodist
-import osmnx as ox
-from osmnx import distance
 import string
-import math
-from sklearn.model_selection import train_test_split, cross_val_predict, cross_val_score, GridSearchCV
-from sklearn.ensemble import IsolationForest
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler, normalize
+from itertools import permutations
+from pathlib import Path
+
+import numpy as np
+import osmnx as ox
+import pandas as pd
+from geopy import distance as geodist
 from sklearn.covariance import EllipticEnvelope
+from sklearn.decomposition import PCA
+from sklearn.ensemble import IsolationForest
 from sklearn.mixture import BayesianGaussianMixture
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, normalize
 from sklearn.svm import OneClassSVM
 
-
-# to be replaced by lookups with Nominatim
+REPO_ROOT = Path(__file__).resolve().parent
+DATA_PATH = Path(os.environ.get('GPS_DATA_PATH', REPO_ROOT / 'data' / 'shanghai_multiday_gps.xlsx'))
+OUTPUT_DIR = REPO_ROOT / 'outputs'
+DATASET_URL = 'https://doi.org/10.21227/fqe8-db87'
 
 full_data = None
 G = None
 
 
 def load_location(place='Shanghai, China', pickle_graph=True, pickle_file=None, data_file=None):
-    """Load a local GPS workbook and the place graph into the module's default state."""
-    data_path = data_file or os.environ.get('GPS_DATA_PATH', 'shanghai_multiday_gps.xlsx')
-    if not os.path.isfile(data_path):
+    """Load the GPS workbook and a drivable road graph for `place` into module state.
+
+    The graph is read from a cached pickle in outputs/ when one exists, otherwise it is
+    downloaded with OSMnx (and cached when `pickle_graph` is true).
+    """
+    data_path = Path(data_file or os.environ.get('GPS_DATA_PATH', DATA_PATH))
+    if not data_path.is_file():
         raise FileNotFoundError(
             f"GPS workbook not found at '{data_path}'. Download it from "
-            "https://doi.org/10.21227/fqe8-db87 and set GPS_DATA_PATH to its path."
+            f"{DATASET_URL} and save it there, or set GPS_DATA_PATH to its path."
         )
     if pickle_file:
-        pickle_path = pickle_file
+        pickle_path = Path(pickle_file)
     else:
-        pickle_path = '_'.join([word.strip() for word in place.split(',')]) + '_graph.p'
+        slug = '_'.join(word.strip() for word in place.split(','))
+        pickle_path = OUTPUT_DIR / f'{slug}_drive_graph.p'
     global G
     try:
         print(f'attempting to load pickle from {pickle_path}')
-        G = pickle.load(open(pickle_path, 'rb'))
-    except:
-        print(f'generating graph for place')
+        with open(pickle_path, 'rb') as handle:
+            G = pickle.load(handle)
+    except (OSError, EOFError, pickle.UnpicklingError):
+        print('generating graph for place')
         G = ox.graph_from_place(place, network_type='drive', simplify=True, retain_all=False)
-    # global nodes, edges
-    # nodes, edges = ox.graph_to_gdfs(G, nodes=True, edges=True)
     print(f'loaded graph for {place}')
     print('loading data')
     global full_data
-    full_data = pd.read_excel(data_path, skiprows=6, header=0)
+    full_data = pd.read_excel(str(data_path), skiprows=6, header=0)
     full_data.columns = ['_'.join(name.lower()
                                   .translate(str.maketrans(' ', ' ', string.punctuation)).split()) for name in
                          full_data.columns]
     if pickle_graph:
-        pickle.dump(G, open(pickle_path, 'wb'))
+        pickle_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(pickle_path, 'wb') as handle:
+            pickle.dump(G, handle)
     return full_data, G
 
 
@@ -99,7 +106,6 @@ def extract_user(data, user_id):
     elif isinstance(data, Community):
         trip_df = data.get_trips_df()
     filtered_df = trip_df[trip_df.uid == user_id]
-    # print(f'adding {len(filtered_df.index)} trips for user {user_id}')
     new_user = User(id=user_id)
     trips = extract_trips(filtered_df)
     new_user.add_trips(trips)
@@ -156,7 +162,6 @@ def generate_trip(user=None, out_type='outlier', data=None):
             if data:
                 user = extract_user(data=data, user_id=user)
             else:
-                global full_data
                 user = extract_user(data=full_data, user_id=user)
         else:
             if isinstance(data, pd.DataFrame):
@@ -190,10 +195,6 @@ class Visit(object):
         self.location = (latitude, longitude)
         self.nn_id = nn_id
         self.label = label
-        # global G
-        # if not nn_id or nn_id == np.nan:
-        #     # place = lookup_city(self.latitude,self.longitude)
-        #     self.nn_id = ox.distance.nearest_nodes(G, self.longitude, self.latitude)
 
     def __repr__(self):
         return str(self.as_row())
@@ -264,7 +265,6 @@ class Trip(object):
                     self.label = np.min([v1.label, v2.label])
 
             elif isinstance(full, pd.Series):
-                # print('extracting trip from series')
                 self.uid = full.uid
                 self.start_time = full.start_time_in_seconds
                 self.end_time = full.end_time_in_seconds
@@ -278,7 +278,6 @@ class Trip(object):
                     Visit(uid=self.uid, timestamp=self.start_time, latitude=self.start_lat, longitude=self.start_lng))
                 self.visits.append(
                     Visit(uid=self.uid, timestamp=self.end_time, latitude=self.end_lat, longitude=self.end_lng))
-                # print(self.visits)
         else:
             if uid:
                 self.uid = uid
@@ -304,10 +303,7 @@ class Trip(object):
                 self.end_lng = end_loc[1]
             else:
                 self.end_loc, self.end_lat, self.end_lng = np.nan, np.nan, np.nan
-        # if (isinstance(self.start_time, int) and isinstance(self.end_time, int)):
         self.duration = self.end_time - self.start_time
-        # else:
-        #     self.duration = np.nan
         self.label = label
         self.bearing = calculate_bearing(self.start_lat, self.start_lng, self.end_lat, self.end_lng)
         self.mh_dist = calculate_manhattan_distance(self.start_lat, self.start_lng, self.end_lat, self.end_lng)
@@ -340,7 +336,8 @@ class Trip(object):
         }
 
 
-class Community(object):  # to hold multiple users' trips and visits
+class Community(object):
+    """All users' trips and visits, with helpers for synthetic data and time features."""
     def __init__(self, users=None, data=None, G=None):
         global full_data
         self.users = None
@@ -407,14 +404,6 @@ class Community(object):  # to hold multiple users' trips and visits
                     results.append(new_trip)
         return results
 
-        # elif object == 'user':
-        #     new_id = max([user.uid for user in self.users]) + 1
-        #     new_user = User(new_id)
-        #     if out_type=='inlier':
-        #         other_trips = [len(user.trips) for user in self.users]
-        #         num_trips = random.randint(min(other_trips),max(other_trips))
-        #         for i in range(num_trips):
-
     def transform_time(self, X=None, data_type='trips', inplace=False):
         if data_type == 'trips':
             X = self.get_trips_df().copy()
@@ -446,6 +435,7 @@ class Community(object):  # to hold multiple users' trips and visits
                 self.train = X
         return X
 
+
 class User(object):
     def __init__(self, id=0, trips=None, locations=None, visits=None, connected_users=None):
         self.uid = id
@@ -475,19 +465,12 @@ class User(object):
             elif isinstance(connected_users[0], User):
                 self.connections = connected_users
         else:
-            # print('no connections')
             self.connections = []
 
     def add_trips(self, trips_to_add):
-        # print(type(trips_to_add))
         if isinstance(trips_to_add, list):
-            # print('trips in list')
             if isinstance(trips_to_add[0], Trip):
-                # print('trips in list of Trip objects')
                 for trip in trips_to_add:
-                    # prev_tids = [t.tid for t in self.trips]
-                    # if trip.tid in prev_tids:
-                    #     trip.tid = int(max(prev_tids) + 1)
                     trip.uid = self.uid
                     self.trips.append(trip)
                     for visit in trip.visits:
@@ -495,18 +478,11 @@ class User(object):
                     self.locations.append(trip.start_loc)
                     self.locations.append(trip.end_loc)
             else:
-                # print('trip as list of attributes')
                 trip = Trip(full=trips_to_add)
-                # if trip.tid in [t.tid for t in self.trips]:
-                #     trip.tid = int(max([t.tid for t in self.trips]) + 1)
                 self.trips.append(trip)
                 for visit in trip.visits:
                     self.visits.append(visit)
         elif isinstance(trips_to_add, Trip):
-            # print('single Trip object passed')
-            # prev_tids = [t.tid for t in self.trips]
-            # if trips_to_add.tid in prev_tids:
-            #     trips_to_add.tid = int(max(prev_tids) + 1)
             trips_to_add.uid = self.uid
             self.trips.append(trips_to_add)
             for visit in trips_to_add.visits:
@@ -534,14 +510,11 @@ class User(object):
                     new_visit = Visit(self.uid, latitude=location[0], longitude=location[1], timestamp=timestamp)
             elif latitude and longitude:
                 new_visit = Visit(self.uid, timestamp=timestamp, latitude=latitude, longitude=longitude)
-        # prev_vids = [visit.vid for visit in self.visits]
-        # new_visit.vid = max(prev_vids) + 1
         self.visits.append(new_visit)
 
     def add_connections(self, member):
         if isinstance(member, list):
             self.connections = self.connections + member
-            # print(self.connections)
         else:
             self.connections.append(member)
 
@@ -551,7 +524,6 @@ class User(object):
         return trip_df
 
     def get_visits_df(self):
-        # visit_df = pd.DataFrame([visit.as_row() for visit in self.visits])
         global G
         visit_df = pd.DataFrame({'uid': self.uid
                                     , "timestamp": [visit.timestamp for visit in self.visits]
@@ -571,11 +543,9 @@ class User(object):
         else:
             all_users = [self.uid]
         if all_users:
-            # print(all_users)
             return Community(users=all_users)
         else:
             return None
-
 
     def __repr__(self):
         return f'ID: {self.uid}; Num_trips = {len(self.trips)}'
@@ -759,15 +729,11 @@ class gps_anomaly_detector(object):
             model_preds = {}
             for name, model in self.model.items():
                 model_preds[name] = model.predict(X)
-                # y_pred_test = model.predict(X_test)
-                # n_error_train = y_pred_train[y_pred_train == -1].size
-                # n_error_test = y_pred_test[y_pred_test == -1].size
             pred_df = pd.DataFrame(model_preds)
             results_df = pred_df.copy()
             results_df['max'] = pred_df.max(axis=1)
             results_df['min'] = pred_df.min(axis=1)
             results_df['avg'] = pred_df.mean(axis=1)
-            # results_df['mode'] = pred_df.apply(lambda x: x.mode())
             return results_df
 
         else:
@@ -775,76 +741,18 @@ class gps_anomaly_detector(object):
 
 
 def main(data_file=None):
+    """Fit the detector ensemble on one random participant's community and summarise it."""
     load_location(data_file=data_file)
-    # glob_comm = Community(users=extract_users(full_data))
-    # G, nodes, edges = pickle.load(open('walk_graph.p', 'rb'))
-    # print('extracting users')
-    # all_users = extract_users(full_data)
-    # test_uid = 146
-    # print(test_uid)
-    # print(type(test_uid))
     test_uid = int(random.choice(full_data.uid))
-    # print(test_uid)
-    # print(type(test_uid))
     test_user = extract_user(full_data, test_uid)
-    # print(test_user.trips)
-    # print(test_user.visits)
-    # filtered_df = full_data[full_data.uid == test_uid]
-    # trips = extract_trips(filtered_df)
-    # print(type(trips[0]))
-    # test_user.add_trips(trips)
-    # print(len(test_user.trips))
-    # test_user.add_connections(member=[180, 211, 196])
-    # print(test_user.uid)
-    # print(test_user.connections)
-    # print(f'extracted {len(all_users)} from data')
-    # full_community = pickle.load(open("global_community.p", "rb"))
-    # all_trips = Community(users=all_users).trips_df
     test_comm = test_user.to_community()
-    # all_trips = test_comm.get_trips_df()
-    # print(all_trips.head())
-    # all_trips = full_community.trips_df
-    # print(len(glob_comm.visits))
-    # all_visits = test_user.get_visits_df()
-    # print(all_visits.head())
-    # print(all_visits.info())
-    # print(all_trips.sample(n=10, random_state=3))
-    # print(all_visits.sample(n=10, random_state=3))
-    # ad = pickle.load(open("community_detector.p", 'rb'))
-
-    # test_trips_df = test_comm.get_trips_df()
-    # print(test_trips_df.info())
-    # print(test_trips_df.describe())
     ad = gps_anomaly_detector(test_comm)
-    # print(ad.train.describe())
-
     ad.fit()
     print(ad.train[0].info())
     print(ad.train[1].describe())
-
-    # pickle.dump(ad, open("community_detector.p", "wb"))
     results = ad.predict()
     print(results.describe())
-    # print(len(test_comm.visits))
-    # new_visits = test_comm.generate_data(object='visit',n=5)
-    # X = pd.DataFrame([visit.as_row() for visit in new_visits])
-    # X_pred = ad.predict(X,kind='visit')
-    # print(X_pred)
-    # print(new_visit.as_row())
-    # print(len(test_comm.visits))
-
-    # print(len(test_comm.trips))
-    # new_trips = test_comm.generate_data(object='trip', n=5)
-    # print(new_trips)
-    # X = pd.DataFrame([trip.as_row() for trip in new_trips])
-    # print(X.columns)
-    # gt_labels = X.pop('label')
-    # # print(X.describe())
-    # X_pred2 = ad.predict(X, kind='trip')
-    # print(X_pred2)
-    # # print(new_trip.as_row())
-    # print(len(test_comm.trips))
 
 
 if __name__ == "__main__":
-    main(data_file=os.environ.get('GPS_DATA_PATH'))
+    main()
